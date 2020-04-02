@@ -31,6 +31,7 @@ import collections
 import operator
 
 import six
+from redis.client import Pipeline
 
 from .base import RedisCollection
 
@@ -126,6 +127,7 @@ class Dict(RedisCollection, collections_abc.MutableMapping):
             return False
 
         def eq_trans(pipe):
+            pipe.multi()
             self_items = self.iteritems(pipe)
             other_items = other.items(pipe) if use_redis else other.items()
 
@@ -211,7 +213,11 @@ class Dict(RedisCollection, collections_abc.MutableMapping):
         (without checking the local cache).
         """
         pipe = self.redis if pipe is None else pipe
-        items = six.iteritems(pipe.hgetall(self.key))
+        if isinstance(pipe, Pipeline):
+            pipe.hgetall(self.key)
+            items = six.iteritems(pipe.execute()[-1])
+        else:
+            items = six.iteritems(self.redis.hgetall(self.key))
 
         return {self._unpickle_key(k): self._unpickle(v) for k, v in items}
 
@@ -259,7 +265,9 @@ class Dict(RedisCollection, collections_abc.MutableMapping):
             return self.cache.pop(key)
 
         def pop_trans(pipe):
-            pickled_value = pipe.hget(self.key, pickled_key)
+            pipe.multi()
+            pipe.hget(self.key, pickled_key)
+            pickled_value = pipe.execute()[-1]
             if pickled_value is None:
                 if default is self.__marker:
                     raise KeyError(key)
@@ -283,13 +291,14 @@ class Dict(RedisCollection, collections_abc.MutableMapping):
         a :exc:`KeyError`.
         """
         def popitem_trans(pipe):
+            pipe.multi()
             try:
-                pickled_key = pipe.hkeys(self.key)[0]
+                pipe.hkeys(self.key)
+                pickled_key = pipe.execute()[-1][0]
             except IndexError:
                 raise KeyError
 
             # pop its value
-            pipe.multi()
             pipe.hget(self.key, pickled_key)
             pipe.hdel(self.key, pickled_key)
             pickled_value, __ = pipe.execute()
@@ -311,9 +320,8 @@ class Dict(RedisCollection, collections_abc.MutableMapping):
             return self.cache[key]
 
         def setdefault_trans(pipe):
-            pickled_key = self._pickle_key(key)
-
             pipe.multi()
+            pickled_key = self._pickle_key(key)
             pipe.hsetnx(self.key, pickled_key, self._pickle_value(default))
             pipe.hget(self.key, pickled_key)
 
@@ -329,6 +337,7 @@ class Dict(RedisCollection, collections_abc.MutableMapping):
 
     def _update_helper(self, other, use_redis=False):
         def _update_helper_trans(pipe):
+            pipe.multi()
             data = {}
 
             if isinstance(other, Dict):
@@ -508,6 +517,7 @@ class Counter(Dict):
 
     def _update_helper(self, other, op, use_redis=False):
         def _update_helper_trans(pipe):
+            pipe.multi()
             data = {}
 
             if isinstance(other, Dict):
@@ -578,6 +588,8 @@ class Counter(Dict):
 
     def _op_helper(self, other, op, swap_args=False, inplace=False):
         def op_trans(pipe):
+            pipe.multi()
+
             # Get a collections.Counter copy of `self`
             self_counter = collections.Counter(
                 {k: v for k, v in self.iteritems(pipe=pipe)}
@@ -613,7 +625,6 @@ class Counter(Dict):
                 pickled_value = self._pickle_value(value)
                 pickled_data[pickled_key] = pickled_value
 
-            pipe.multi()
             pipe.delete(self.key)
             if pickled_data:
                 pipe.hmset(self.key, pickled_data)

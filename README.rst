@@ -133,3 +133,7 @@ License: ISC
 © 2013-? Honza Javorek <mail@honzajavorek>
 
 This work is licensed under `ISC license <https://en.wikipedia.org/wiki/ISC_license>`_.
+
+Why this fork?
+------------
+We have backported changes from v0.7 and v0.8 (required to support more recent versions of redis to a v0.6 base (last version with python2 support). The changes are in a branch called ``backporting``
